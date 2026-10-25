@@ -1,4 +1,4 @@
-```yaml
+yaml
 name: Microservices CI/CD
 
 on:
@@ -29,7 +29,7 @@ jobs:
       - name: Check SonarQube availability
         run: |
           curl --fail --silent --show-error \
-            http://127.0.0.1:9000/api/system/status
+            http://3.25.170.49:9000/api/system/status
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
@@ -38,11 +38,10 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: http://127.0.0.1:9000
+          SONAR_HOST_URL: http://3.25.170.49:9000
 
       - name: Build Docker Images
         run: docker compose build
 
       - name: List Docker Images
         run: docker compose images
-```
