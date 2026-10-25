@@ -15,32 +15,39 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      # Step 1: Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Step 2: Verify Docker installation
       - name: Verify Docker
         run: |
           docker --version
           docker compose version
 
+      # Step 3: Check SonarQube availability
       - name: Check SonarQube availability
         run: |
           curl --fail --silent --show-error \
             http://3.25.170.49:9000/api/system/status
 
+      # Step 4: Validate Docker Compose configuration
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
 
+      # Step 5: Run SonarQube code analysis
       - name: Run SonarQube Analysis
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: http://3.25.170.49:9000
 
+      # Step 6: Build Docker images
       - name: Build Docker Images
         run: docker compose build
 
+      # Step 7: List built Docker images
       - name: List Docker Images
         run: docker compose images
