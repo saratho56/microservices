@@ -11,43 +11,79 @@ permissions:
 
 jobs:
   build:
-    name: SonarQube Analysis and Docker Build
+    name: SonarQube Analysis, Docker Build and Nexus Push
     runs-on: self-hosted
 
+    env:
+      NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+
     steps:
-      # Step 1: Checkout source code
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Step 2: Verify Docker installation
       - name: Verify Docker
         run: |
           docker --version
           docker compose version
 
-      # Step 3: Check SonarQube availability
       - name: Check SonarQube availability
         run: |
           curl --fail --silent --show-error \
             http://3.25.170.49:9000/api/system/status
 
-      # Step 4: Validate Docker Compose configuration
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
 
-      # Step 5: Run SonarQube code analysis
       - name: Run SonarQube Analysis
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: http://3.25.170.49:9000
 
-      # Step 6: Build Docker images
       - name: Build Docker Images
         run: docker compose build
 
-      # Step 7: List built Docker images
+      - name: Login to Nexus
+        env:
+          NEXUS_USERNAME: ${{ secrets.NEXUS_USERNAME }}
+          NEXUS_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          printf '%s' "$NEXUS_PASSWORD" |
+            docker login "http://${NEXUS_HOST}" \
+              --username "$NEXUS_USERNAME" \
+              --password-stdin
+
+      - name: Tag and Push Images to Nexus
+        env:
+          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+        run: |
+          set -euo pipefail
+
+          for service in auth-service payment-service frontend; do
+            image_id=$(docker compose images -q "$service" | head -n 1)
+
+            if [ -z "$image_id" ]; then
+              echo "ERROR: No image found for service: $service"
+              exit 1
+            fi
+
+            target_image="${NEXUS_HOST}/docker-hosted/${service}:${GITHUB_SHA}"
+
+            docker tag "$image_id" "$target_image"
+            docker push "$target_image"
+          done
+
+      - name: Logout from Nexus
+        if: always()
+        env:
+          NEXUS_HOST: ${{ secrets.NEXUS_HOST }}
+        run: |
+          docker logout "http://${NEXUS_HOST}" || true
+
       - name: List Docker Images
         run: docker compose images
+
