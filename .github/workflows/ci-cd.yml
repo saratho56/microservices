@@ -31,7 +31,7 @@ jobs:
       - name: Check SonarQube availability
         run: |
           curl --fail --silent --show-error \
-            http://3.25.170.49:9000/api/system/status
+            http://54.79.216.91:9000/api/system/status
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet
