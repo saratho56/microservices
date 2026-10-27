@@ -40,7 +40,8 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: http://3.25.170.49:9000
+          SONAR_HOST_URL: http://54.79.216.91
+        :9000
 
       - name: Build Docker Images
         run: docker compose build
