@@ -10,7 +10,6 @@ permissions:
   contents: read
 
 env:
-  DOCKERHUB_USERNAME: saratho56
   IMAGE_NAME: saratho56/micro-services
 
 jobs:
@@ -19,7 +18,7 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      # 1. Checkout repository
+      # 1. Checkout source code
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -40,7 +39,7 @@ jobs:
         with:
           context: ./backend/auth_service
           push: true
-          tags: saratho56/micro-services:auth-${{ github.sha }}
+          tags: saratho56/micro-services:auth-service-${{ github.sha }}
 
       # 5. Build and push Payment Service
       - name: Build and Push Payment Service
@@ -48,7 +47,7 @@ jobs:
         with:
           context: ./backend/payment_service
           push: true
-          tags: saratho56/micro-services:payment-${{ github.sha }}
+          tags: saratho56/micro-services:payment-service-${{ github.sha }}
 
       # 6. Build and push Frontend
       - name: Build and Push Frontend
@@ -61,6 +60,4 @@ jobs:
       # 7. Configure SSH
       - name: Configure SSH
         env:
-          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
-        run: |
-          install -m 700 -d ~/.ssh
+          PROD_SSH_KEY: ${{ secrets
