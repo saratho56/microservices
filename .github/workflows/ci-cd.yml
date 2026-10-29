@@ -151,7 +151,7 @@ jobs:
             "cd '$PROD_DIR' && \
              sudo env IMAGE_TAG='$IMAGE_TAG' \
              docker compose pull \
-             auth-service payment-service frontend nginx"
+             auth-service payment-service frontend"
 
       # 13. Deploy application services
       - name: Deploy to Production
@@ -163,7 +163,7 @@ jobs:
             "cd '$PROD_DIR' && \
              sudo env IMAGE_TAG='$IMAGE_TAG' \
              docker compose up -d --no-build \
-             auth-service payment-service frontend nginx"
+             auth-service payment-service frontend"
 
       # 14. Verify deployment
       - name: Verify Production Deployment
