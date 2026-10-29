@@ -1,4 +1,4 @@
-name: Build and Deploy Microservices
+name: Microservices CI/CD
 
 on:
   push:
@@ -9,56 +9,159 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE_NAME: saratho56/micro-services
-
 jobs:
-  build-and-deploy:
-    name: Build, Push and Deploy
+  build-and-push:
+    name: SonarQube Analysis, Build and Push
     runs-on: self-hosted
 
     steps:
       # 1. Checkout source code
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      # 2. Configure Docker Buildx
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # 3. Login to Docker Hub
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          fetch-depth: 0
 
-      # 4. Build and push Auth Service
-      - name: Build and Push Auth Service
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend/auth_service
-          push: true
-          tags: saratho56/micro-services:auth-service-${{ github.sha }}
+      # 2. Verify Docker installation
+      - name: Verify Docker
+        run: |
+          set -e
+          docker --version
+          docker compose version
 
-      # 5. Build and push Payment Service
-      - name: Build and Push Payment Service
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend/payment_service
-          push: true
-          tags: saratho56/micro-services:payment-service-${{ github.sha }}
+      # 3. Check SonarQube availability
+      - name: Check SonarQube availability
+        run: |
+          curl --fail --silent --show-error \
+            http://54.79.216.91:9000/api/system/status
 
-      # 6. Build and push Frontend
-      - name: Build and Push Frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: true
-          tags: saratho56/micro-services:frontend-${{ github.sha }}
+      # 4. Validate Docker Compose configuration
+      - name: Validate Docker Compose
+        run: |
+          docker compose config --quiet
 
-      # 7. Configure SSH
-      - name: Configure SSH
+      # 5. Run SonarQube analysis
+      - name: SonarQube Analysis
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
-          PROD_SSH_KEY: ${{ secrets
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: http://54.79.216.91:9000
 
+      # 6. Build Docker images
+      - name: Build Docker Images
+        run: |
+          set -e
+          docker compose build auth-service payment-service frontend
+
+      # 7. Login to Docker Hub
+      - name: Login to Docker Hub
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          printf '%s' "$DOCKER_PASSWORD" | docker login \
+            --username "$DOCKER_USERNAME" \
+            --password-stdin
+
+      # 8. Tag and push versioned images
+      - name: Push Images to Docker Hub
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          DOCKER_REPO="saratho56/micro-services"
+
+          for SERVICE in auth-service payment-service frontend; do
+            SOURCE_IMAGE="microservices-${SERVICE}:latest"
+            TARGET_IMAGE="${DOCKER_REPO}:${SERVICE}-${IMAGE_TAG}"
+
+            if ! docker image inspect "$SOURCE_IMAGE" >/dev/null 2>&1; then
+              echo "ERROR: Image not found: $SOURCE_IMAGE"
+              docker image ls
+              exit 1
+            fi
+
+            echo "Tagging $SOURCE_IMAGE as $TARGET_IMAGE"
+            docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
+
+            echo "Pushing $TARGET_IMAGE"
+            docker push "$TARGET_IMAGE"
+          done
+
+      # 9. Configure production SSH
+      - name: Configure Production SSH
+        env:
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$PROD_SSH_KEY" > "$HOME/.ssh/prod_key"
+          chmod 600 "$HOME/.ssh/prod_key"
+
+          ssh-keyscan -H 16.176.183.156 >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      # 10. Verify production connection
+      - name: Test Production SSH
+        run: |
+          ssh -i "$HOME/.ssh/prod_key" \
+            -o BatchMode=yes \
+            ubuntu@16.176.183.156 \
+            "echo 'Production SSH connection successful'"
+
+      # 11. Validate production Compose configuration
+      - name: Validate Production Compose
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
+            "cd /opt/microservices && \
+            sudo env IMAGE_TAG=$IMAGE_TAG docker compose config --quiet"
+
+      # 12. Pull the exact images on production
+      - name: Pull Production Images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
+            "cd /opt/microservices && \
+            sudo env IMAGE_TAG=$IMAGE_TAG docker compose pull \
+            auth-service payment-service frontend"
+
+      # 13. Deploy application services
+      - name: Deploy to Production
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
+            "cd /opt/microservices && \
+            sudo env IMAGE_TAG=$IMAGE_TAG docker compose up -d --no-build \
+            auth-service payment-service frontend"
+
+      # 14. Verify deployment
+      - name: Verify Production Deployment
+        run: |
+          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
+            "cd /opt/microservices && \
+            sudo docker compose ps"
+
+      # 15. Remove temporary SSH key
+      - name: Cleanup SSH Key
+        if: always()
+        run: |
+          rm -f "$HOME/.ssh/prod_key"
+
+      # 16. Logout from Docker Hub
+      - name: Logout from Docker Hub
+        if: always()
+        run: |
+          docker logout || true
