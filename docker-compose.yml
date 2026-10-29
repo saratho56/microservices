@@ -12,7 +12,9 @@ services:
       - app-network
 
   auth-service:
-    build: ./backend/auth_service
+    build:
+      context: .
+      dockerfile: backend/auth_service/Dockerfile
     environment:
       - MONGODB_URI=mongodb://mongodb:27017/payment_app
       - JWT_SECRET=your-secret-key
@@ -30,7 +32,9 @@ services:
       - app-network
 
   payment-service:
-    build: ./backend/payment_service
+    build:
+      context: .
+      dockerfile: backend/payment_service/Dockerfile
     environment:
       - MONGODB_URI=mongodb://mongodb:27017/payment_app
       - ELASTICSEARCH_HOST=elasticsearch
