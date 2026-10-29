@@ -11,8 +11,15 @@ permissions:
 
 jobs:
   build-and-push:
-    name: SonarQube Analysis, Build and Push
+    name: SonarQube, Build, Push and Deploy
     runs-on: self-hosted
+
+    env:
+      DOCKER_REPO: saratho56/micro-services
+      IMAGE_TAG: ${{ github.sha }}
+      PROD_HOST: 16.176.183.156
+      PROD_USER: ubuntu
+      PROD_DIR: /opt/microservices
 
     steps:
       # 1. Checkout source code
@@ -21,36 +28,55 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. Verify Docker installation
+      # 2. Verify Docker
       - name: Verify Docker
         run: |
-          set -e
+          set -euo pipefail
           docker --version
           docker compose version
 
-      # 3. Check SonarQube availability
-      - name: Check SonarQube availability
+      # 3. Check SonarQube
+      - name: Check SonarQube
         run: |
+          set -euo pipefail
           curl --fail --silent --show-error \
             http://54.79.216.91:9000/api/system/status
 
-      # 4. Validate Docker Compose configuration
+      # 4. Validate runner Compose file
       - name: Validate Docker Compose
         run: |
+          set -euo pipefail
           docker compose config --quiet
 
-      # 5. Run SonarQube analysis
+      # 5. SonarQube analysis
       - name: SonarQube Analysis
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: http://54.79.216.91:9000
 
-      # 6. Build Docker images
-      - name: Build Docker Images
+      # 6. Build all four application images
+      - name: Build Application Images
         run: |
-          set -e
-          docker compose build auth-service payment-service frontend
+          set -euo pipefail
+
+          docker build \
+            -f backend/auth_service/Dockerfile \
+            -t "${DOCKER_REPO}:auth-service-${IMAGE_TAG}" .
+
+          docker build \
+            -f backend/payment_service/Dockerfile \
+            -t "${DOCKER_REPO}:payment-service-${IMAGE_TAG}" .
+
+          docker build \
+            -f frontend/Dockerfile \
+            -t "${DOCKER_REPO}:frontend-${IMAGE_TAG}" \
+            ./frontend
+
+          docker build \
+            -f nginx/Dockerfile \
+            -t "${DOCKER_REPO}:nginx-${IMAGE_TAG}" \
+            ./nginx
 
       # 7. Login to Docker Hub
       - name: Login to Docker Hub
@@ -64,30 +90,14 @@ jobs:
             --username "$DOCKER_USERNAME" \
             --password-stdin
 
-      # 8. Tag and push versioned images
-      - name: Push Images to Docker Hub
-        env:
-          IMAGE_TAG: ${{ github.sha }}
+      # 8. Push versioned images
+      - name: Push Application Images
         run: |
           set -euo pipefail
 
-          DOCKER_REPO="saratho56/micro-services"
-
-          for SERVICE in auth-service payment-service frontend; do
-            SOURCE_IMAGE="microservices-${SERVICE}:latest"
-            TARGET_IMAGE="${DOCKER_REPO}:${SERVICE}-${IMAGE_TAG}"
-
-            if ! docker image inspect "$SOURCE_IMAGE" >/dev/null 2>&1; then
-              echo "ERROR: Image not found: $SOURCE_IMAGE"
-              docker image ls
-              exit 1
-            fi
-
-            echo "Tagging $SOURCE_IMAGE as $TARGET_IMAGE"
-            docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
-
-            echo "Pushing $TARGET_IMAGE"
-            docker push "$TARGET_IMAGE"
+          for SERVICE in auth-service payment-service frontend nginx; do
+            IMAGE="${DOCKER_REPO}:${SERVICE}-${IMAGE_TAG}"
+            docker push "$IMAGE"
           done
 
       # 9. Configure production SSH
@@ -98,63 +108,77 @@ jobs:
           set -euo pipefail
 
           install -m 700 -d "$HOME/.ssh"
-          printf '%s\n' "$PROD_SSH_KEY" > "$HOME/.ssh/prod_key"
+
+          printf '%s\n' "$PROD_SSH_KEY" \
+            > "$HOME/.ssh/prod_key"
+
           chmod 600 "$HOME/.ssh/prod_key"
 
-          ssh-keyscan -H 16.176.183.156 >> "$HOME/.ssh/known_hosts"
+          touch "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      # 10. Verify production connection
+          ssh-keyscan -H "$PROD_HOST" \
+            >> "$HOME/.ssh/known_hosts"
+
+      # 10. Verify production SSH
       - name: Test Production SSH
         run: |
+          set -euo pipefail
+
           ssh -i "$HOME/.ssh/prod_key" \
             -o BatchMode=yes \
-            ubuntu@16.176.183.156 \
+            "${PROD_USER}@${PROD_HOST}" \
             "echo 'Production SSH connection successful'"
 
-      # 11. Validate production Compose configuration
+      # 11. Validate production Compose
       - name: Validate Production Compose
-        env:
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
-            "cd /opt/microservices && \
-            sudo env IMAGE_TAG=$IMAGE_TAG docker compose config --quiet"
+          ssh -i "$HOME/.ssh/prod_key" \
+            "${PROD_USER}@${PROD_HOST}" \
+            "cd '$PROD_DIR' && \
+             sudo env IMAGE_TAG='$IMAGE_TAG' \
+             docker compose config --quiet"
 
-      # 12. Pull the exact images on production
+      # 12. Pull new application images
       - name: Pull Production Images
-        env:
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
-            "cd /opt/microservices && \
-            sudo env IMAGE_TAG=$IMAGE_TAG docker compose pull \
-            auth-service payment-service frontend"
+          ssh -i "$HOME/.ssh/prod_key" \
+            "${PROD_USER}@${PROD_HOST}" \
+            "cd '$PROD_DIR' && \
+             sudo env IMAGE_TAG='$IMAGE_TAG' \
+             docker compose pull \
+             auth-service payment-service frontend nginx"
 
       # 13. Deploy application services
       - name: Deploy to Production
-        env:
-          IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
 
-          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
-            "cd /opt/microservices && \
-            sudo env IMAGE_TAG=$IMAGE_TAG docker compose up -d --no-build \
-            auth-service payment-service frontend"
+          ssh -i "$HOME/.ssh/prod_key" \
+            "${PROD_USER}@${PROD_HOST}" \
+            "cd '$PROD_DIR' && \
+             sudo env IMAGE_TAG='$IMAGE_TAG' \
+             docker compose up -d --no-build \
+             auth-service payment-service frontend nginx"
 
       # 14. Verify deployment
       - name: Verify Production Deployment
         run: |
-          ssh -i "$HOME/.ssh/prod_key" ubuntu@16.176.183.156 \
-            "cd /opt/microservices && \
-            sudo docker compose ps"
+          set -euo pipefail
 
-      # 15. Remove temporary SSH key
+          ssh -i "$HOME/.ssh/prod_key" \
+            "${PROD_USER}@${PROD_HOST}" \
+            "cd '$PROD_DIR' && \
+             sudo env IMAGE_TAG='$IMAGE_TAG' \
+             docker compose ps"
+
+          echo "Deployment completed."
+
+      # 15. Cleanup SSH key
       - name: Cleanup SSH Key
         if: always()
         run: |
@@ -165,3 +189,4 @@ jobs:
         if: always()
         run: |
           docker logout || true
+
